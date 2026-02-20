@@ -35,12 +35,17 @@ st.markdown("""
 
 # --- FUNÇÕES DE DADOS ---
 def carregar_player():
-    res = supabase.table("player").select("*").limit(1).execute()
-    if not res.data:
-        # Cria o personagem inicial se o banco estiver vazio
-        supabase.table("player").insert({"level": 1, "exp": 0, "rank": "E", "gold": 0}).execute()
-        return carregar_player()
-    return res.data[0]
+    try:
+        res = supabase.table("player").select("*").execute()
+        if res.data and len(res.data) > 0:
+            return res.data[0]
+        else:
+            # Se não achar ninguém, ele tenta criar um agora mesmo
+            supabase.table("player").insert({"level": 1, "exp": 0, "rank": "E", "gold": 0}).execute()
+            return {"level": 1, "exp": 0, "rank": "E", "gold": 0, "id": 1}
+    except Exception as e:
+        st.error(f"Erro ao buscar dados: {e}")
+        return None
 
 # --- INTERFACE PRINCIPAL ---
 player = carregar_player()
@@ -82,3 +87,4 @@ for q in quests_res.data:
         st.balloons()
 
         st.rerun()
+
