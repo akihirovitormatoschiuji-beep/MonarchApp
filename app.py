@@ -1,11 +1,22 @@
 import streamlit as st
 from supabase import create_client
-import pandas as pd
 
-# --- CONEXÃO COM O SUPABASE ---
-# Ele vai tentar ler dos Secrets (nuvem). Se não achar, usa os textos abaixo.
-URL = st.secrets["SUPABASE_URL"]
-KEY = st.secrets["SUPABASE_KEY"]
+# Função para conectar com segurança
+def init_connection():
+    try:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+        return create_client(url, key)
+    except Exception as e:
+        st.error(f"Erro ao ler Secrets: {e}")
+        return None
+
+supabase = init_connection()
+
+if supabase:
+    st.success("Caminho do Monarca Estabelecido! ⚔️")
+else:
+    st.error("Falha na conexão. Verifique os Secrets.")
 
 try:
     supabase = create_client(URL, KEY)
@@ -69,4 +80,5 @@ for q in quests_res.data:
         supabase.table("player").update({"exp": novo_xp, "level": novo_lvl}).eq("id", player['id']).execute()
         supabase.table("custom_quests").delete().eq("id", q['id']).execute()
         st.balloons()
+
         st.rerun()
