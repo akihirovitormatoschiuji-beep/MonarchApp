@@ -8,112 +8,132 @@ st.set_page_config(page_title="MONARCH SYSTEM", page_icon="🌑", layout="wide")
 @st.cache_resource
 def init_db():
     try:
-        url = st.secrets["SUPABASE_URL"].strip()
-        key = st.secrets["SUPABASE_KEY"].strip()
-        return create_client(url, key)
-    except:
-        return None
+        return create_client(st.secrets["SUPABASE_URL"].strip(), st.secrets["SUPABASE_KEY"].strip())
+    except: return None
 
 supabase = init_db()
-
-# Garante que o ID do usuário existe na sessão do navegador
 if 'user_id' not in st.session_state:
     st.session_state.user_id = str(uuid.uuid4())
 
-# --- FUNÇÃO PARA CARREGAR DADOS ---
+# --- LÓGICA DE TÍTULOS ---
+def obter_titulo(level):
+    if level >= 50: return "Soberano das Sombras"
+    if level >= 30: return "Monarca"
+    if level >= 15: return "Candidato a Rei"
+    if level >= 5: return "Caçador Veterano"
+    return "Candidato"
+
+# --- FUNÇÃO CARREGAR DADOS ---
 def carregar_dados():
     if not supabase: return None
     try:
         res = supabase.table("hunters").select("*").eq("user_id", st.session_state.user_id).execute()
         return res.data[0] if res.data else None
-    except:
-        return None
+    except: return None
 
 hunter = carregar_dados()
 
-# --- TELA DE REGISTRO (O DESPERTAR) ---
+# --- TELA DE REGISTRO ---
 if not hunter:
     st.title("🌑 O DESPERTAR")
     nome_in = st.text_input("Como o Sistema deve te chamar?")
     if st.button("CONFIRMAR DESPERTAR"):
         if nome_in and supabase:
-            try:
-                supabase.table("hunters").insert({
-                    "user_id": st.session_state.user_id, 
-                    "nome": nome_in, 
-                    "level": 1, "exp": 0, "gold": 0, "rank": "E"
-                }).execute()
-                st.success("Sincronizando com a Associação...")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Erro ao registrar: {e}")
+            supabase.table("hunters").insert({
+                "user_id": st.session_state.user_id, "nome": nome_in, 
+                "level": 1, "exp": 0, "gold": 0, "rank": "E"
+            }).execute()
+            st.rerun()
     st.stop()
 
-# --- SE CHEGOU AQUI, O HUNTER EXISTE ---
-# Segurança: se hunter['user_id'] falhar, usamos st.session_state.user_id
+# --- STATUS E TÍTULO ---
 u_id = hunter.get('user_id', st.session_state.user_id)
+titulo_atual = obter_titulo(hunter.get('level', 1))
 
-st.sidebar.title("🌑 STATUS")
-st.sidebar.markdown(f"**NOME:** {hunter.get('nome', 'akz')}")
-st.sidebar.markdown(f"**RANK:** {hunter.get('rank', 'E')}")
-st.sidebar.metric("GOLD", f"{hunter.get('gold', 0)} G")
+st.sidebar.title("🌑 STATUS DO MONARCA")
+st.sidebar.subheader(f"[{titulo_atual}]")
+st.sidebar.markdown(f"**NOME:** {hunter.get('nome')}")
+st.sidebar.markdown(f"**NÍVEL:** {hunter.get('level', 1)} | **RANK:** {hunter.get('rank')}")
+st.sidebar.metric("OURO", f"{hunter.get('gold', 0)} G")
 
-# Abas do Sistema
+# --- SISTEMA DE ABAS ---
 t_q, t_a, t_l, t_i = st.tabs(["⚔️ QUESTS", "🌑 ARISE", "💰 LOJA", "🎒 INVENTÁRIO"])
 
 with t_q:
-    st.header("Quests")
-    missao = st.text_input("Qual o desafio de hoje?")
-    if st.button("REGISTRAR QUEST") and missao:
-        supabase.table("active_quests").insert({"user_id": u_id, "missao": missao}).execute()
-        st.rerun()
+    st.header("Associação de Caçadores: Quests")
+    c_q1, c_q2 = st.columns([3, 1])
+    missao = c_q1.text_input("Descrição do Desafio:")
+    rank_q = c_q2.selectbox("Rank da Quest:", ["E", "D", "C", "B", "A", "S"])
     
-    # Listar Quests com proteção de erro
-    try:
-        qs = supabase.table("active_quests").eq("user_id", u_id).execute()
-        for q in qs.data:
-            c1, c2 = st.columns([4,1])
-            c1.info(f"Quest: {q['missao']}")
-            if c2.button("CONCLUIR", key=f"q_{q['id']}"):
-                n_xp = hunter.get('exp', 0) + 50
-                n_gold = hunter.get('gold', 0) + 20
-                supabase.table("hunters").update({"exp": n_xp, "gold": n_gold}).eq("user_id", u_id).execute()
-                supabase.table("shadow_history").insert({"user_id": u_id, "origem": q['missao']}).execute()
-                supabase.table("active_quests").delete().eq("id", q['id']).execute()
-                st.rerun()
-    except:
-        st.write("Sem quests ativas.")
+    recompensas = {"E": 20, "D": 50, "C": 100, "B": 250, "A": 600, "S": 2000}
+    
+    if st.button("REGISTRAR QUEST NO SISTEMA"):
+        if missao:
+            supabase.table("active_quests").insert({
+                "user_id": u_id, "missao": f"[{rank_q}] {missao}", "recompensa": recompensas[rank_q]
+            }).execute()
+            st.success(f"Quest Rank {rank_q} registrada!")
+            st.rerun()
+
+    st.divider()
+    qs = supabase.table("active_quests").eq("user_id", u_id).execute()
+    for q in qs.data:
+        col1, col2 = st.columns([4, 1])
+        col1.info(q['missao'])
+        if col2.button("CONCLUIR", key=f"q_{q['id']}"):
+            ganho = q.get('recompensa', 20)
+            n_gold = hunter.get('gold', 0) + ganho
+            n_exp = hunter.get('exp', 0) + (ganho // 2)
+            n_level = hunter.get('level', 1)
+            
+            # Lógica de Level Up
+            if n_exp >= (n_level * 100):
+                n_level += 1
+                n_exp = 0
+                st.balloons()
+            
+            supabase.table("hunters").update({"gold": n_gold, "exp": n_exp, "level": n_level}).eq("user_id", u_id).execute()
+            supabase.table("shadow_history").insert({"user_id": u_id, "origem": q['missao']}).execute()
+            supabase.table("active_quests").delete().eq("id", q['id']).execute()
+            st.rerun()
 
 with t_a:
-    st.header("Arise (Extração)")
-    try:
-        hist = supabase.table("shadow_history").eq("user_id", u_id).execute()
-        if not hist.data: st.write("Vença quests para extrair sombras.")
-        for h in hist.data:
-            st.warning(f"Sombra disponível de: {h['origem']}")
-            n_s = st.text_input("Nome da Sombra:", key=f"name_{h['id']}")
+    st.header("Arise (Extração de Sombras)")
+    hist = supabase.table("shadow_history").eq("user_id", u_id).execute()
+    if not hist.data:
+        st.write("Não há almas para extrair. Conclua quests primeiro.")
+    
+    for h in hist.data:
+        with st.container():
+            st.markdown(f"**Alma Disponível:** {h['origem']}")
+            nome_s = st.text_input("Dê um nome à sombra:", key=f"n_{h['id']}")
             if st.button("ARISE", key=f"b_{h['id']}"):
-                if hunter.get('gold', 0) >= 100:
-                    supabase.table("army").insert({"user_id": u_id, "nome": n_s, "origem": h['origem']}).execute()
-                    supabase.table("hunters").update({"gold": hunter['gold']-100}).eq("user_id", u_id).execute()
+                if nome_s:
+                    supabase.table("army").insert({"user_id": u_id, "nome": nome_s, "origem": h['origem']}).execute()
                     supabase.table("shadow_history").delete().eq("id", h['id']).execute()
+                    st.success(f"A sombra {nome_s} jurou lealdade!")
                     st.rerun()
-                else: st.error("Gold insuficiente (100G necessário).")
-    except: pass
+                else: st.warning("A sombra precisa de um nome.")
 
 with t_l:
-    st.header("Loja")
-    if st.button("Comprar Poção (100 Gold)"):
-        if hunter.get('gold', 0) >= 100:
-            supabase.table("hunters").update({"gold": hunter['gold']-100}).eq("user_id", u_id).execute()
-            st.success("Item comprado!")
-            st.rerun()
+    st.header("Loja Dimensional")
+    itens = [
+        {"nome": "Poção de Cura", "preco": 100, "desc": "Restaura o vigor."},
+        {"nome": "Pedra de Rank Up", "preco": 5000, "desc": "Aumenta seu Rank de Caçador."}
+    ]
+    for item in itens:
+        c1, c2, c3 = st.columns([2, 1, 1])
+        c1.write(f"**{item['nome']}**\n*{item['desc']}*")
+        c2.write(f"{item['preco']} G")
+        if c3.button("COMPRAR", key=item['nome']):
+            if hunter.get('gold', 0) >= item['preco']:
+                supabase.table("hunters").update({"gold": hunter['gold'] - item['preco']}).eq("user_id", u_id).execute()
+                st.success(f"Adquiriu {item['nome']}!")
+                st.rerun()
+            else: st.error("Ouro insuficiente.")
 
 with t_i:
     st.header("Exército de Sombras")
-    try:
-        exercito = supabase.table("army").eq("user_id", u_id).execute()
-        for s in exercito.data:
-            st.write(f"🌑 **{s['nome']}** (Sombra de: {s['origem']})")
-    except:
-        st.write("Exército vazio.")
+    army = supabase.table("army").eq("user_id", u_id).execute()
+    for s in army.data:
+        st.markdown(f"🌑 **{s['nome']}** — *Nascido de: {s['origem']}*")
