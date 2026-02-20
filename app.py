@@ -1,112 +1,72 @@
 import streamlit as st
-import sqlite3
+from supabase import create_client
 import pandas as pd
-from datetime import datetime
+
+# --- CONEXÃO COM O SUPABASE ---
+# Ele vai tentar ler dos Secrets (nuvem). Se não achar, usa os textos abaixo.
+URL = st.secrets["SUPABASE_URL"]
+KEY = st.secrets["SUPABASE_KEY"]
+
+try:
+    supabase = create_client(URL, KEY)
+except Exception as e:
+    st.error("Erro na conexão com o banco de dados. Verifique as chaves.")
+    st.stop()
 
 # --- CONFIGURAÇÃO DE UI ---
-st.set_page_config(page_title="MONARCH SYSTEM", page_icon="⚔️", layout="wide")
+st.set_page_config(page_title="MONARCH SYSTEM", page_icon="⚔️")
 
 st.markdown("""
     <style>
     .stApp { background-color: #0E1117; color: #FFFFFF; }
-    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
-    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #161B22; border-radius: 5px; color: white; }
-    .stTabs [aria-selected="true"] { border-bottom: 2px solid #6272A4 !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- BANCO DE DADOS ---
-conn = sqlite3.connect('monarch_v1.db', check_same_thread=False)
-c = conn.cursor()
+# --- FUNÇÕES DE DADOS ---
+def carregar_player():
+    res = supabase.table("player").select("*").limit(1).execute()
+    if not res.data:
+        # Cria o personagem inicial se o banco estiver vazio
+        supabase.table("player").insert({"level": 1, "exp": 0, "rank": "E", "gold": 0}).execute()
+        return carregar_player()
+    return res.data[0]
 
-c.execute('''CREATE TABLE IF NOT EXISTS player 
-             (level INTEGER, exp INTEGER, gold INTEGER, rank TEXT, titulo TEXT)''')
-c.execute('''CREATE TABLE IF NOT EXISTS custom_quests 
-             (id INTEGER PRIMARY KEY, nome TEXT, xp INTEGER, diff TEXT)''')
-c.execute('''CREATE TABLE IF NOT EXISTS registry_hunters 
-             (id INTEGER PRIMARY KEY, nome TEXT, rank TEXT, obs TEXT)''')
-c.execute('''CREATE TABLE IF NOT EXISTS shadows (nome TEXT, classe TEXT)''')
+# --- INTERFACE PRINCIPAL ---
+player = carregar_player()
+xp_target = player['level'] * 100
 
-if c.execute("SELECT count(*) FROM player").fetchone()[0] == 0:
-    c.execute("INSERT INTO player VALUES (1, 0, 0, 'E', 'Desperto')")
-conn.commit()
+st.sidebar.title(f"🌑 MONARCA")
+st.sidebar.markdown(f"### **RANK {player['rank']}**")
+st.sidebar.metric("Nível", player['level'], f"{player['exp']}/{xp_target} XP")
+st.sidebar.metric("Ouro", f"{player['gold']} G")
 
-# --- CARREGAMENTO ---
-lvl, exp, gold, rank_p, titulo = c.execute("SELECT * FROM player").fetchone()
-xp_target = lvl * 100
+# --- MISSÕES ---
+st.header("🎯 Central de Missões")
 
-# --- INTERFACE LATERAL ---
-st.sidebar.title(f"🌑 {titulo}")
-st.sidebar.markdown(f"### **RANK {rank_p}**")
-st.sidebar.metric("Nível", lvl, f"{exp}/{xp_target} XP")
-st.sidebar.metric("Gold", f"{gold} G")
-st.sidebar.divider()
-
-# --- CONTEÚDO ---
-tab1, tab2, tab3 = st.tabs(["🎯 MISSÕES", "🏛️ ASSOCIAÇÃO", "🎒 EXÉRCITO"])
-
-with tab1:
-    st.header("🎯 Central de Missões")
-    
-    with st.expander("➕ CRIAR NOVA MISSÃO"):
-        n_q = st.text_input("Nome da Missão")
-        d_q = st.select_slider("Dificuldade", options=["E", "D", "C", "B", "A", "S"])
-        xp_reward = {"E": 20, "D": 60, "C": 150, "B": 400, "A": 800, "S": 2000}
-        if st.button("PUBLICAR NO SISTEMA"):
-            if n_q:
-                c.execute("INSERT INTO custom_quests (nome, xp, diff) VALUES (?, ?, ?)", (n_q, xp_reward[d_q], d_q))
-                conn.commit()
-                st.rerun()
-
-    st.subheader("Quests Ativas")
-    active_qs = c.execute("SELECT * FROM custom_quests").fetchall()
-    for qid, qn, qxp, qd in active_qs:
-        col1, col2 = st.columns([4, 1])
-        col1.write(f"**[{qd}]** {qn} | `+{qxp} XP`")
-        if col2.button("FINALIZAR", key=f"finish_{qid}"):
-            c.execute("UPDATE player SET exp=exp+?, gold=gold+? WHERE rowid=1", (qxp, qxp//2))
-            c.execute("DELETE FROM custom_quests WHERE id=?", (qid,))
-            conn.commit()
-            st.balloons()
+with st.expander("➕ CADASTRAR NOVA MISSÃO"):
+    nome_q = st.text_input("O que você precisa fazer?")
+    if st.button("PUBLICAR NO SISTEMA"):
+        if nome_q:
+            supabase.table("custom_quests").insert({"nome": nome_q, "xp": 50}).execute()
+            st.success("Missão registrada na nuvem!")
             st.rerun()
 
-with tab2:
-    st.header("🏛️ Associação de Caçadores")
-    st.write("Cadastre as pessoas que te inspiram ou seus rivais para monitorar o ranking.")
-    
-    with st.expander("👤 CADASTRAR CAÇADOR"):
-        h_nome = st.text_input("Nome do Caçador")
-        h_rank = st.selectbox("Rank do Indivíduo", ["E", "D", "C", "B", "A", "S", "Nacional"])
-        h_obs = st.text_area("Especialidade/Observação")
-        if st.button("REGISTRAR CAÇADOR"):
-            if h_nome:
-                c.execute("INSERT INTO registry_hunters (nome, rank, obs) VALUES (?, ?, ?)", (h_nome, h_rank, h_obs))
-                conn.commit()
-                st.rerun()
-    
-    hunters = c.execute("SELECT nome, rank, obs FROM registry_hunters").fetchall()
-    if hunters:
-        df = pd.DataFrame(hunters, columns=["Nome", "Rank", "Observação"])
-        st.table(df)
-    else:
-        st.info("Nenhum caçador registrado na sua rede.")
+st.subheader("Quests Ativas")
+quests_res = supabase.table("custom_quests").select("*").execute()
 
-with tab3:
-    st.header("🌑 Exército de Sombras")
-    s_name = st.text_input("Extrair sombra de um desafio concluído:")
-    if st.button("ERGA-SE"):
-        if s_name:
-            c.execute("INSERT INTO shadows VALUES (?, 'Soldado')", (s_name,))
-            conn.commit()
-            st.success(f"A sombra de {s_name} foi extraída.")
-    
-    st.subheader("Sombras Sob seu Comando")
-    shadow_list = c.execute("SELECT * FROM shadows").fetchall()
-    for sn, sc in shadow_list:
-        st.write(f"👤 {sn} ({sc})")
-
-# --- LEVEL UP ---
-if exp >= xp_target:
-    c.execute("UPDATE player SET level=level+1, exp=0 WHERE rowid=1")
-    conn.commit()
-    st.rerun()
+for q in quests_res.data:
+    col1, col2 = st.columns([4, 1])
+    col1.write(f"⚔️ {q['nome']} | `+50 XP`")
+    if col2.button("CONCLUIR", key=f"q_{q['id']}"):
+        # Atualiza XP no banco
+        novo_xp = player['exp'] + 50
+        novo_lvl = player['level']
+        
+        if novo_xp >= xp_target:
+            novo_lvl += 1
+            novo_xp = 0
+        
+        supabase.table("player").update({"exp": novo_xp, "level": novo_lvl}).eq("id", player['id']).execute()
+        supabase.table("custom_quests").delete().eq("id", q['id']).execute()
+        st.balloons()
+        st.rerun()
